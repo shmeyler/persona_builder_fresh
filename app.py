@@ -45,3 +45,51 @@ if submitted:
     st.write("Resonate Layer:")
     st.write(f"- Vertical: {vertical}")
     st.write(f"- Traits: {traits}")
+import pandas as pd
+import streamlit as st
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from io import BytesIO
+
+st.header("📁 Google Drive File Preview")
+
+# Step 1: Authenticate with service account from Streamlit secrets
+creds = service_account.Credentials.from_service_account_info(st.secrets["gcp"])
+drive_service = build("drive", "v3", credentials=creds)
+
+# Step 2: Get folder ID input
+folder_id = st.text_input("Enter Google Drive folder ID")
+
+def list_files(folder_id):
+    try:
+        results = drive_service.files().list(
+            q=f"'{folder_id}' in parents and trashed=false",
+            fields="files(id, name, mimeType)",
+        ).execute()
+        return results.get("files", [])
+    except Exception as e:
+        st.error(f"Google Drive error: {e}")
+        return []
+
+def read_csv_from_drive(file_id):
+    try:
+        request = drive_service.files().get_media(fileId=file_id)
+        file_data = request.execute()
+        df = pd.read_csv(BytesIO(file_data))
+        return df
+    except Exception as e:
+        st.error(f"Error reading CSV: {e}")
+        return None
+
+# Step 3: If folder ID is provided, show list of files
+if folder_id:
+    files = list_files(folder_id)
+    if not files:
+        st.warning("No files found or check folder permissions.")
+    else:
+        for file in files:
+            st.markdown(f"📄 **{file['name']}** ({file['mimeType']})")
+            if file["mimeType"] == "text/csv":
+                df = read_csv_from_drive(file["id"])
+                if df is not None:
+                    st.dataframe(df.head())
