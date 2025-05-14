@@ -1,63 +1,21 @@
 import streamlit as st
-
-st.set_page_config(page_title="Persona Builder", layout="wide")
-
-st.title("🧠 AI Persona Builder")
-st.markdown("Fill out the form below to generate a custom persona profile.")
-
-with st.form("persona_form"):
-    st.header("📋 Demographics")
-    age_range = st.text_input("Age Range", placeholder="e.g. 30–50")
-    gender = st.text_input("Gender", placeholder="e.g. Predominantly Male")
-    location = st.text_input("Location", placeholder="e.g. Urban areas")
-    education = st.text_input("Education Level")
-    occupation = st.text_input("Occupation / Industry")
-
-    st.header("💭 Psychographics")
-    income = st.text_input("Income Level", placeholder="$80,000+")
-    interests = st.text_area("Interests and Hobbies")
-    values = st.text_area("Values and Beliefs")
-    goals = st.text_area("Goals and Aspirations")
-    pain_points = st.text_area("Pain Points and Challenges")
-
-    st.header("📂 Resonate Taxonomy Inputs (placeholder)")
-    vertical = st.selectbox("Select a vertical", ["Automotive", "Retail", "Travel", "Healthcare", "Tech"])
-    traits = st.multiselect("Select Traits", ["In-Market", "Eco-Conscious", "Luxury Buyer", "Budget-Conscious"])
-
-    submitted = st.form_submit_button("🔍 Build Persona")
-
-if submitted:
-    st.success("Persona submitted! (next: process inputs and generate persona PDF)")
-    st.write("Demographics:")
-    st.write(f"- Age Range: {age_range}")
-    st.write(f"- Gender: {gender}")
-    st.write(f"- Location: {location}")
-    st.write(f"- Education: {education}")
-    st.write(f"- Occupation: {occupation}")
-
-    st.write("Psychographics:")
-    st.write(f"- Income: {income}")
-    st.write(f"- Interests: {interests}")
-    st.write(f"- Values: {values}")
-    st.write(f"- Goals: {goals}")
-    st.write(f"- Pain Points: {pain_points}")
-
-    st.write("Resonate Layer:")
-    st.write(f"- Vertical: {vertical}")
-    st.write(f"- Traits: {traits}")
 import pandas as pd
-import streamlit as st
+import docx
+import fitz  # PyMuPDF
+from PIL import Image
+import pytesseract
+from io import BytesIO
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from io import BytesIO
+import tempfile
 
-st.header("📁 Google Drive File Preview")
+st.set_page_config(page_title="Persona Builder", layout="wide")
+st.title("🧠 AI Persona Builder")
 
-# Step 1: Authenticate with service account from Streamlit secrets
+# 📁 Google Drive Setup
 creds = service_account.Credentials.from_service_account_info(st.secrets["gcp"])
 drive_service = build("drive", "v3", credentials=creds)
 
-# Step 2: Get folder ID input
 folder_id = st.text_input("Enter Google Drive folder ID")
 
 def list_files(folder_id):
@@ -68,28 +26,81 @@ def list_files(folder_id):
         ).execute()
         return results.get("files", [])
     except Exception as e:
-        st.error(f"Google Drive error: {e}")
+        st.error(f"Google Drive API error: {e}")
         return []
 
-def read_csv_from_drive(file_id):
+def read_csv(file_id):
     try:
-        request = drive_service.files().get_media(fileId=file_id)
-        file_data = request.execute()
-        df = pd.read_csv(BytesIO(file_data))
-        return df
+        data = drive_service.files().get_media(fileId=file_id).execute()
+        return pd.read_csv(BytesIO(data))
     except Exception as e:
-        st.error(f"Error reading CSV: {e}")
+        st.error(f"CSV read error: {e}")
         return None
 
-# Step 3: If folder ID is provided, show list of files
+def read_excel(file_id):
+    try:
+        data = drive_service.files().get_media(fileId=file_id).execute()
+        return pd.read_excel(BytesIO(data))
+    except Exception as e:
+        st.error(f"Excel read error: {e}")
+        return None
+
+def read_docx(file_id):
+    try:
+        data = drive_service.files().get_media(fileId=file_id).execute()
+        doc = docx.Document(BytesIO(data))
+        return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+    except Exception as e:
+        st.error(f"Word read error: {e}")
+        return None
+
+def read_pdf(file_id):
+    try:
+        data = drive_service.files().get_media(fileId=file_id).execute()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(data)
+            doc = fitz.open(tmp.name)
+            return "\n".join([page.get_text() for page in doc])
+    except Exception as e:
+        st.error(f"PDF read error: {e}")
+        return None
+
+def read_png(file_id):
+    try:
+        data = drive_service.files().get_media(fileId=file_id).execute()
+        image = Image.open(BytesIO(data))
+        return pytesseract.image_to_string(image)
+    except Exception as e:
+        st.error(f"OCR error: {e}")
+        return None
+
 if folder_id:
     files = list_files(folder_id)
     if not files:
-        st.warning("No files found or check folder permissions.")
+        st.warning("No files found.")
     else:
         for file in files:
-            st.markdown(f"📄 **{file['name']}** ({file['mimeType']})")
+            st.markdown(f"---\n📄 **{file['name']}** ({file['mimeType']})")
+            parsed = None
             if file["mimeType"] == "text/csv":
-                df = read_csv_from_drive(file["id"])
-                if df is not None:
-                    st.dataframe(df.head())
+                parsed = read_csv(file["id"])
+                if parsed is not None:
+                    st.dataframe(parsed.head())
+            elif file["mimeType"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+                parsed = read_excel(file["id"])
+                if parsed is not None:
+                    st.dataframe(parsed.head())
+            elif file["mimeType"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                parsed = read_docx(file["id"])
+                if parsed:
+                    st.text(parsed[:2000])
+            elif file["mimeType"] == "application/pdf":
+                parsed = read_pdf(file["id"])
+                if parsed:
+                    st.text(parsed[:2000])
+            elif file["mimeType"] == "image/png":
+                parsed = read_png(file["id"])
+                if parsed:
+                    st.text(parsed[:2000])
+            else:
+                st.info("⏭️ Unsupported file type")
