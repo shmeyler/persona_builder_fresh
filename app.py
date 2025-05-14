@@ -23,14 +23,14 @@ folder_id = st.text_input("Enter Google Drive Folder ID to scan:")
 # Load credentials
 def load_gdrive_service():
     credentials = service_account.Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
+        st.secrets["gcp"],
         scopes=["https://www.googleapis.com/auth/drive.readonly"],
     )
     return build("drive", "v3", credentials=credentials)
 
 def load_vision_client():
     credentials = service_account.Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"]
+        st.secrets["gcp"]
     )
     return vision.ImageAnnotatorClient(credentials=credentials)
 
