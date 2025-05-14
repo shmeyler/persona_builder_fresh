@@ -11,7 +11,7 @@ import tempfile
 from pptx import Presentation
 
 st.set_page_config(page_title="Persona Builder", layout="wide")
-st.title("🧠 AI Persona Builder")
+st.title("🧠 AI Persona Builder with OCR Tables")
 
 # Authenticate with Google
 creds = service_account.Credentials.from_service_account_info(st.secrets["gcp"])
@@ -56,25 +56,41 @@ def read_docx(file_id):
         st.error(f"Word read error: {e}")
         return None
 
-def read_pdf(file_id):
+def read_pdf_table(file_id):
     try:
         data = drive_service.files().get_media(fileId=file_id).execute()
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(data)
             doc = fitz.open(tmp.name)
-            return "\n".join([page.get_text() for page in doc])
+            text = "\n".join([page.get_text() for page in doc])
+        df = extract_table_like_structure(text)
+        return df
     except Exception as e:
         st.error(f"PDF read error: {e}")
         return None
 
-def read_image_vision(file_id):
+def read_image_table(file_id):
     try:
         data = drive_service.files().get_media(fileId=file_id).execute()
         image = vision.Image(content=data)
         response = vision_client.text_detection(image=image)
-        return response.full_text_annotation.text
+        text = response.full_text_annotation.text
+        df = extract_table_like_structure(text)
+        return df
     except Exception as e:
-        st.error(f"Google Vision OCR error: {e}")
+        st.error(f"OCR error: {e}")
+        return None
+
+def extract_table_like_structure(text):
+    try:
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        rows = [line.split() for line in lines if len(line.split()) > 1]
+        if not rows:
+            return None
+        df = pd.DataFrame(rows[1:], columns=rows[0]) if len(rows) > 1 else pd.DataFrame(rows)
+        return df
+    except Exception as e:
+        st.error(f"Table parsing error: {e}")
         return None
 
 def read_pptx(file_id):
@@ -96,9 +112,10 @@ if folder_id:
     if not files:
         st.warning("No files found.")
     else:
-        for file in files:
+        MAX_FILES = 5
+        progress = st.progress(0)
+        for i, file in enumerate(files[:MAX_FILES]):
             st.markdown(f"---\n📄 **{file['name']}** ({file['mimeType']})")
-            st.code(file["mimeType"])
             parsed = None
             mt = file["mimeType"]
             if mt == "text/csv":
@@ -116,18 +133,21 @@ if folder_id:
             elif mt == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
                 parsed = read_docx(file["id"])
                 if parsed:
-                    st.text(parsed[:2000])
+                    with st.expander("Preview DOCX"):
+                        st.text(parsed[:1000])
             elif mt == "application/pdf":
-                parsed = read_pdf(file["id"])
-                if parsed:
-                    st.text(parsed[:2000])
+                parsed = read_pdf_table(file["id"])
+                if parsed is not None:
+                    st.dataframe(parsed.head())
             elif mt in ["image/png", "image/jpeg"]:
-                parsed = read_image_vision(file["id"])
-                if parsed:
-                    st.text(parsed[:2000])
+                parsed = read_image_table(file["id"])
+                if parsed is not None:
+                    st.dataframe(parsed.head())
             elif mt == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
                 parsed = read_pptx(file["id"])
                 if parsed:
-                    st.text(parsed[:2000])
+                    with st.expander("Preview PPTX"):
+                        st.text(parsed[:1000])
             else:
                 st.info("⏭️ Unsupported file type: " + mt)
+            progress.progress((i + 1) / MAX_FILES)
