@@ -12,7 +12,7 @@ import tempfile
 st.set_page_config(page_title="Persona Builder", layout="wide")
 st.title("🧠 AI Persona Builder")
 
-# 📁 Google Drive Setup
+# Authenticate with Google
 creds = service_account.Credentials.from_service_account_info(st.secrets["gcp"])
 drive_service = build("drive", "v3", credentials=creds)
 
@@ -81,6 +81,7 @@ if folder_id:
     else:
         for file in files:
             st.markdown(f"---\n📄 **{file['name']}** ({file['mimeType']})")
+            st.code(file["mimeType"])
             parsed = None
             if file["mimeType"] == "text/csv":
                 parsed = read_csv(file["id"])
@@ -103,4 +104,4 @@ if folder_id:
                 if parsed:
                     st.text(parsed[:2000])
             else:
-                st.info("⏭️ Unsupported file type")
+                st.info("⏭️ Unsupported file type: " + file["mimeType"])
