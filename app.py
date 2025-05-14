@@ -8,19 +8,75 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.cloud import vision
 from PIL import Image
-import tempfile
-import mimetypes
+import pandas as pd
+import fitz  # PyMuPDF
+from docx import Document
+from pptx import Presentation
 
-# Basic config
+# === SECTION 1: UI Mapping for Resonate Fields ===
+resonate_taxonomy_map = {
+    "Values and Beliefs": {
+        "category": "Personal Values",
+        "attributes": [
+            "Stimulation", "Tolerance", "Achievement", "Equality", "Independence", "Tradition", "Security"
+        ]
+    },
+    "Motivations": {
+        "category": "Psychological Drivers",
+        "attributes": [
+            "Life as an adventure", "Freedom", "Recognition", "Safety", "Curiosity", "Being in control"
+        ]
+    },
+    "Pain Points": {
+        "category": "Purchase Barriers",
+        "attributes": [
+            "Cost", "Trust", "Complexity", "Time commitment", "Lack of customization", "Confusing tech"
+        ]
+    },
+    "Media Habits": {
+        "category": "Media Consumption",
+        "attributes": [
+            "Streaming", "Social Media", "TV", "Podcasts", "Mobile Apps", "News Sites"
+        ]
+    },
+    "Goals and Aspirations": {
+        "category": "Life Goals",
+        "attributes": [
+            "Career advancement", "Work-life balance", "Helping others", "Wealth", "Adventure", "Stability"
+        ]
+    }
+}
+
+def build_persona_form_ui(mapping):
+    st.header("Refine Persona Attributes")
+    results = {}
+    for field, meta in mapping.items():
+        with st.expander(f"{field} ({meta['category']})"):
+            suggestions = meta["attributes"]
+            selected = st.multiselect(f"Select from Resonate Attributes for '{field}'", suggestions)
+
+            manual_input = st.text_input(f"Optional: Add custom entries for '{field}' (comma-separated)", key=field)
+            manual_entries = [x.strip() for x in manual_input.split(",") if x.strip()]
+            matched = [entry for entry in manual_entries if entry in suggestions]
+            unmatched = [entry for entry in manual_entries if entry not in suggestions]
+
+            results[field] = {
+                "selected": selected,
+                "manual": manual_entries,
+                "matched": matched,
+                "unmatched": unmatched
+            }
+
+            if unmatched:
+                st.warning(f"Unmatched entries: {', '.join(unmatched)}")
+    return results
+
+# === SECTION 2: File Processing ===
 st.set_page_config(page_title="Persona Builder", layout="wide")
 st.title("Persona Builder")
 
-logging.basicConfig(level=logging.INFO)
-
-# UI input for Google Drive folder ID
 folder_id = st.text_input("Enter Google Drive Folder ID to scan:")
 
-# Load credentials
 def load_gdrive_service():
     credentials = service_account.Credentials.from_service_account_info(
         st.secrets["gcp"],
@@ -29,12 +85,9 @@ def load_gdrive_service():
     return build("drive", "v3", credentials=credentials)
 
 def load_vision_client():
-    credentials = service_account.Credentials.from_service_account_info(
-        st.secrets["gcp"]
-    )
+    credentials = service_account.Credentials.from_service_account_info(st.secrets["gcp"])
     return vision.ImageAnnotatorClient(credentials=credentials)
 
-# Recursively list all files
 def list_drive_files(service, folder_id):
     files = []
     query = f"'{folder_id}' in parents and trashed = false"
@@ -56,7 +109,6 @@ def list_drive_files(service, folder_id):
             break
     return files
 
-# Download a file
 def download_file(service, file_id):
     request = service.files().get_media(fileId=file_id)
     fh = io.BytesIO()
@@ -67,7 +119,6 @@ def download_file(service, file_id):
     fh.seek(0)
     return fh
 
-# OCR with Google Vision
 def extract_text_from_image(image_bytes, vision_client):
     image = vision.Image(content=image_bytes)
     response = vision_client.text_detection(image=image)
@@ -75,7 +126,6 @@ def extract_text_from_image(image_bytes, vision_client):
         raise Exception(response.error.message)
     return response.text_annotations[0].description if response.text_annotations else ""
 
-# Main logic
 if folder_id:
     st.write(f"📁 Scanning folder `{folder_id}`...")
     try:
@@ -83,6 +133,8 @@ if folder_id:
         vision_client = load_vision_client()
         all_files = list_drive_files(drive_service, folder_id)
         st.success(f"✅ Found {len(all_files)} files")
+
+        all_text_blocks = []
 
         for file in all_files:
             name = file["name"]
@@ -93,39 +145,35 @@ if folder_id:
                     img_bytes = download_file(drive_service, file["id"]).read()
                     text = extract_text_from_image(img_bytes, vision_client)
                     st.text_area(f"📄 Extracted text from {name}:", text, height=200)
+                    all_text_blocks.append(text)
 
                 elif mime == "text/csv":
-                    import pandas as pd
                     file_bytes = download_file(drive_service, file["id"])
                     df = pd.read_csv(file_bytes)
-                    st.write(f"📊 CSV Preview: `{name}`")
                     st.dataframe(df.head())
 
                 elif mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-                    import pandas as pd
                     file_bytes = download_file(drive_service, file["id"])
                     df = pd.read_excel(file_bytes)
-                    st.write(f"📊 Excel Preview: `{name}`")
                     st.dataframe(df.head())
 
                 elif mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-                    from docx import Document
                     file_bytes = download_file(drive_service, file["id"])
                     doc = Document(file_bytes)
-                    full_text = "\n".join([para.text for para in doc.paragraphs])
-                    st.text_area(f"📝 DOCX Contents: {name}", full_text, height=200)
+                    text = "\n".join([para.text for para in doc.paragraphs])
+                    st.text_area(f"📝 DOCX Contents: {name}", text, height=200)
+                    all_text_blocks.append(text)
 
                 elif mime == "application/pdf":
-                    import fitz  # PyMuPDF
                     file_bytes = download_file(drive_service, file["id"])
                     doc = fitz.open(stream=file_bytes, filetype="pdf")
                     text = ""
                     for page in doc:
                         text += page.get_text()
                     st.text_area(f"📄 PDF Contents: {name}", text, height=200)
+                    all_text_blocks.append(text)
 
                 elif mime == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
-                    from pptx import Presentation
                     file_bytes = download_file(drive_service, file["id"])
                     prs = Presentation(file_bytes)
                     text_runs = []
@@ -135,12 +183,19 @@ if folder_id:
                                 text_runs.append(shape.text)
                     full_text = "\n\n".join(text_runs)
                     st.text_area(f"📽️ PPTX Contents: {name}", full_text, height=200)
+                    all_text_blocks.append(full_text)
 
                 else:
                     st.warning(f"⏭️ Unsupported MIME type: {mime}")
 
             except Exception as file_err:
                 st.error(f"❌ Failed to process {name}: {file_err}")
+
+        if all_text_blocks:
+            st.divider()
+            st.subheader("🧠 Now Refine the Persona with Resonate Mapping")
+            form_data = build_persona_form_ui(resonate_taxonomy_map)
+            st.json(form_data)
 
     except Exception as e:
         st.error(f"❌ Error initializing services or accessing folder: {e}")
