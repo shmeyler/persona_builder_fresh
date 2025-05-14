@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import docx
-import fitz
+import fitz  # PyMuPDF
 from PIL import Image
 from io import BytesIO
 from google.oauth2 import service_account
@@ -11,12 +11,14 @@ import tempfile
 from pptx import Presentation
 
 st.set_page_config(page_title="Persona Builder", layout="wide")
-st.title("🧠 AI Persona Builder with Recursive Drive Scan")
+st.title("🧠 AI Persona Builder (Folder-Safe, Recursive)")
 
+# --- Google Auth ---
 creds = service_account.Credentials.from_service_account_info(st.secrets["gcp"])
 drive_service = build("drive", "v3", credentials=creds)
 vision_client = vision.ImageAnnotatorClient(credentials=creds)
 
+# --- UI ---
 folder_id = st.text_input("Enter Google Drive folder ID")
 
 filetypes = st.multiselect(
@@ -36,6 +38,7 @@ ext_map = {
     "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 }
 
+# --- Recursive File Listing ---
 def list_files_recursive(folder_id):
     files = []
 
@@ -51,6 +54,7 @@ def list_files_recursive(folder_id):
     recurse(folder_id)
     return files
 
+# --- File Readers ---
 def read_csv(file_id):
     try:
         data = drive_service.files().get_media(fileId=file_id).execute()
@@ -99,8 +103,7 @@ def extract_table_like_structure(text):
     if not rows:
         return None
     try:
-        df = pd.DataFrame(rows[1:], columns=rows[0]) if len(rows) > 1 else pd.DataFrame(rows)
-        return df
+        return pd.DataFrame(rows[1:], columns=rows[0]) if len(rows) > 1 else pd.DataFrame(rows)
     except:
         return None
 
@@ -117,6 +120,7 @@ def read_pptx(file_id):
     except:
         return None
 
+# --- Main Loop ---
 if folder_id:
     files = list_files_recursive(folder_id)
     if not files:
@@ -124,12 +128,18 @@ if folder_id:
     else:
         MAX_FILES = 10
         progress = st.progress(0)
+
         for i, file in enumerate(files[:MAX_FILES]):
-            mt = file["mimeType"]
+            if file["mimeType"] == "application/vnd.google-apps.folder":
+                continue  # Skip folder objects
+
             name = file["name"]
-            st.write(f"▶ Processing: {name} ({mt})")
-            if mt not in [ext_map[ft] for ft in filetypes if ft in ext_map]:
-                st.info("⏭️ Skipped due to file type filter")
+            mt = file.get("mimeType", "")
+            st.write(f"▶ Processing: {name}")
+            st.code(mt)
+
+            if mt not in ext_map.values():
+                st.info(f"⏭️ Unsupported file type: {mt or 'unknown'}")
                 progress.progress((i + 1) / MAX_FILES)
                 continue
 
@@ -164,6 +174,4 @@ if folder_id:
                 if parsed:
                     with st.expander("Preview PPTX"):
                         st.text(parsed[:1000])
-            else:
-                st.warning("⏭️ Unhandled MIME type")
             progress.progress((i + 1) / MAX_FILES)
