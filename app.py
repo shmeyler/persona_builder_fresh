@@ -85,80 +85,62 @@ if folder_id:
         st.success(f"✅ Found {len(all_files)} files")
 
         for file in all_files:
+            name = file["name"]
+            mime = file["mimeType"]
+            st.write(f"🔍 Processing `{name}` ({mime})")
             try:
-                name = file["name"]
-                mime = file["mimeType"]
-                st.write(f"🔍 Processing `{name}` ({mime})")
-
                 if mime.startswith("image/"):
                     img_bytes = download_file(drive_service, file["id"]).read()
                     text = extract_text_from_image(img_bytes, vision_client)
                     st.text_area(f"📄 Extracted text from {name}:", text, height=200)
 
-                
-elif mime == "text/csv":
-    file_bytes = download_file(drive_service, file["id"])
-    try:
-        import pandas as pd
-        df = pd.read_csv(file_bytes)
-        st.write(f"📊 CSV Preview: `{name}`")
-        st.dataframe(df.head())
-    except Exception as csv_err:
-        st.error(f"❌ Failed to parse CSV `{name}`: {csv_err}")
+                elif mime == "text/csv":
+                    import pandas as pd
+                    file_bytes = download_file(drive_service, file["id"])
+                    df = pd.read_csv(file_bytes)
+                    st.write(f"📊 CSV Preview: `{name}`")
+                    st.dataframe(df.head())
 
-elif mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-    file_bytes = download_file(drive_service, file["id"])
-    try:
-        import pandas as pd
-        df = pd.read_excel(file_bytes)
-        st.write(f"📊 Excel Preview: `{name}`")
-        st.dataframe(df.head())
-    except Exception as xls_err:
-        st.error(f"❌ Failed to parse Excel `{name}`: {xls_err}")
+                elif mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+                    import pandas as pd
+                    file_bytes = download_file(drive_service, file["id"])
+                    df = pd.read_excel(file_bytes)
+                    st.write(f"📊 Excel Preview: `{name}`")
+                    st.dataframe(df.head())
 
-elif mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-    file_bytes = download_file(drive_service, file["id"])
-    try:
-        from docx import Document
-        doc = Document(file_bytes)
-        full_text = "\n".join([para.text for para in doc.paragraphs])
-        st.text_area(f"📝 DOCX Contents: {name}", full_text, height=200)
-    except Exception as docx_err:
-        st.error(f"❌ Failed to parse DOCX `{name}`: {docx_err}")
+                elif mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                    from docx import Document
+                    file_bytes = download_file(drive_service, file["id"])
+                    doc = Document(file_bytes)
+                    full_text = "\n".join([para.text for para in doc.paragraphs])
+                    st.text_area(f"📝 DOCX Contents: {name}", full_text, height=200)
 
-elif mime == "application/pdf":
-    file_bytes = download_file(drive_service, file["id"])
-    try:
-        import fitz  # PyMuPDF
-        doc = fitz.open(stream=file_bytes, filetype="pdf")
-        text = ""
-        for page in doc:
-            text += page.get_text()
-        st.text_area(f"📄 PDF Contents: {name}", text, height=200)
-    except Exception as pdf_err:
-        st.error(f"❌ Failed to parse PDF `{name}`: {pdf_err}")
+                elif mime == "application/pdf":
+                    import fitz  # PyMuPDF
+                    file_bytes = download_file(drive_service, file["id"])
+                    doc = fitz.open(stream=file_bytes, filetype="pdf")
+                    text = ""
+                    for page in doc:
+                        text += page.get_text()
+                    st.text_area(f"📄 PDF Contents: {name}", text, height=200)
 
-elif mime == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
-    file_bytes = download_file(drive_service, file["id"])
-    try:
-        from pptx import Presentation
-        prs = Presentation(file_bytes)
-        text_runs = []
-        for slide in prs.slides:
-            for shape in slide.shapes:
-                if hasattr(shape, "text"):
-                    text_runs.append(shape.text)
-        full_text = "\n\n".join(text_runs)
-        st.text_area(f"📽️ PPTX Contents: {name}", full_text, height=200)
-    except Exception as pptx_err:
-        st.error(f"❌ Failed to parse PPTX `{name}`: {pptx_err}")
+                elif mime == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+                    from pptx import Presentation
+                    file_bytes = download_file(drive_service, file["id"])
+                    prs = Presentation(file_bytes)
+                    text_runs = []
+                    for slide in prs.slides:
+                        for shape in slide.shapes:
+                            if hasattr(shape, "text"):
+                                text_runs.append(shape.text)
+                    full_text = "\n\n".join(text_runs)
+                    st.text_area(f"📽️ PPTX Contents: {name}", full_text, height=200)
 
-else:
-    st.warning(f"⏭️ Unsupported MIME type: {mime}")
-
+                else:
+                    st.warning(f"⏭️ Unsupported MIME type: {mime}")
 
             except Exception as file_err:
-                st.error(f"❌ Failed to process {file['name']}: {file_err}")
+                st.error(f"❌ Failed to process {name}: {file_err}")
 
     except Exception as e:
         st.error(f"❌ Error initializing services or accessing folder: {e}")
