@@ -197,5 +197,31 @@ if folder_id:
             form_data = build_persona_form_ui(resonate_taxonomy_map)
             st.json(form_data)
 
+            if form_data:
+                st.subheader("📋 Final Persona Summary")
+                persona_summary = {}
+                for field, values in form_data.items():
+                    combined = list(set(values["selected"] + values["matched"] + values["manual"]))
+                    persona_summary[field] = ", ".join(combined)
+                st.table(persona_summary.items())
+
+                # Export options
+                import json
+                import csv
+
+                # JSON download
+                json_str = json.dumps(persona_summary, indent=2)
+                st.download_button("📥 Download as JSON", json_str, file_name="persona.json", mime="application/json")
+
+                # CSV download
+                import io
+                csv_buffer = io.StringIO()
+                writer = csv.writer(csv_buffer)
+                writer.writerow(["Field", "Value"])
+                for k, v in persona_summary.items():
+                    writer.writerow([k, v])
+                st.download_button("📥 Download as CSV", csv_buffer.getvalue(), file_name="persona.csv", mime="text/csv")
+
+
     except Exception as e:
         st.error(f"❌ Error initializing services or accessing folder: {e}")
