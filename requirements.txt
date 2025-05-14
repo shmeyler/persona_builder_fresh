@@ -1,9 +1,11 @@
 streamlit
 pandas
-pytesseract
 pillow
 python-docx
 PyMuPDF
 openpyxl
+xlrd
+python-pptx
 google-api-python-client
 google-auth
+google-cloud-vision
