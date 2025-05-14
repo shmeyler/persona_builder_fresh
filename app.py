@@ -11,14 +11,20 @@ import tempfile
 from pptx import Presentation
 
 st.set_page_config(page_title="Persona Builder", layout="wide")
-st.title("🧠 AI Persona Builder with OCR Tables")
+st.title("🧠 AI Persona Builder with File Filters & OCR Fallbacks")
 
-# Authenticate with Google
+# Auth
 creds = service_account.Credentials.from_service_account_info(st.secrets["gcp"])
 drive_service = build("drive", "v3", credentials=creds)
 vision_client = vision.ImageAnnotatorClient(credentials=creds)
 
 folder_id = st.text_input("Enter Google Drive folder ID")
+
+filetypes = st.multiselect(
+    "Choose file types to process",
+    ["csv", "xlsx", "xls", "docx", "pdf", "png", "jpg", "pptx"],
+    default=["csv", "xlsx", "xls", "docx", "pdf", "png", "jpg", "pptx"]
+)
 
 def list_files(folder_id):
     try:
@@ -35,16 +41,14 @@ def read_csv(file_id):
     try:
         data = drive_service.files().get_media(fileId=file_id).execute()
         return pd.read_csv(BytesIO(data))
-    except Exception as e:
-        st.error(f"CSV read error: {e}")
+    except Exception:
         return None
 
 def read_excel(file_id, engine=None):
     try:
         data = drive_service.files().get_media(fileId=file_id).execute()
         return pd.read_excel(BytesIO(data), engine=engine)
-    except Exception as e:
-        st.error(f"Excel read error: {e}")
+    except Exception:
         return None
 
 def read_docx(file_id):
@@ -52,8 +56,7 @@ def read_docx(file_id):
         data = drive_service.files().get_media(fileId=file_id).execute()
         doc = docx.Document(BytesIO(data))
         return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-    except Exception as e:
-        st.error(f"Word read error: {e}")
+    except Exception:
         return None
 
 def read_pdf_table(file_id):
@@ -63,10 +66,8 @@ def read_pdf_table(file_id):
             tmp.write(data)
             doc = fitz.open(tmp.name)
             text = "\n".join([page.get_text() for page in doc])
-        df = extract_table_like_structure(text)
-        return df
-    except Exception as e:
-        st.error(f"PDF read error: {e}")
+        return extract_table_like_structure(text)
+    except Exception:
         return None
 
 def read_image_table(file_id):
@@ -74,23 +75,19 @@ def read_image_table(file_id):
         data = drive_service.files().get_media(fileId=file_id).execute()
         image = vision.Image(content=data)
         response = vision_client.text_detection(image=image)
-        text = response.full_text_annotation.text
-        df = extract_table_like_structure(text)
-        return df
-    except Exception as e:
-        st.error(f"OCR error: {e}")
+        return extract_table_like_structure(response.full_text_annotation.text)
+    except Exception:
         return None
 
 def extract_table_like_structure(text):
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    rows = [line.split() for line in lines if len(line.split()) > 1]
+    if not rows:
+        return None
     try:
-        lines = [line.strip() for line in text.split("\n") if line.strip()]
-        rows = [line.split() for line in lines if len(line.split()) > 1]
-        if not rows:
-            return None
         df = pd.DataFrame(rows[1:], columns=rows[0]) if len(rows) > 1 else pd.DataFrame(rows)
         return df
-    except Exception as e:
-        st.error(f"Table parsing error: {e}")
+    except Exception:
         return None
 
 def read_pptx(file_id):
@@ -103,9 +100,20 @@ def read_pptx(file_id):
                 if hasattr(shape, "text"):
                     text.append(shape.text)
         return "\n".join(text)
-    except Exception as e:
-        st.error(f"PPTX read error: {e}")
+    except Exception:
         return None
+
+# Mapping from extension to MIME type
+ext_map = {
+    "csv": "text/csv",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "xls": "application/vnd.ms-excel",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pdf": "application/pdf",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+}
 
 if folder_id:
     files = list_files(folder_id)
@@ -115,39 +123,46 @@ if folder_id:
         MAX_FILES = 5
         progress = st.progress(0)
         for i, file in enumerate(files[:MAX_FILES]):
-            st.markdown(f"---\n📄 **{file['name']}** ({file['mimeType']})")
-            parsed = None
             mt = file["mimeType"]
-            if mt == "text/csv":
+            name = file["name"]
+            st.write(f"▶ Processing: {name} ({mt})")
+            if mt not in [ext_map[ft] for ft in filetypes if ft in ext_map]:
+                st.info("⏭️ Skipped due to file type filter")
+                progress.progress((i + 1) / MAX_FILES)
+                continue
+
+            parsed = None
+            if mt == ext_map["csv"]:
                 parsed = read_csv(file["id"])
                 if parsed is not None:
                     st.dataframe(parsed.head())
-            elif mt == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+            elif mt == ext_map["xlsx"]:
                 parsed = read_excel(file["id"])
                 if parsed is not None:
                     st.dataframe(parsed.head())
-            elif mt == "application/vnd.ms-excel":
+            elif mt == ext_map["xls"]:
                 parsed = read_excel(file["id"], engine="xlrd")
                 if parsed is not None:
                     st.dataframe(parsed.head())
-            elif mt == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            elif mt == ext_map["docx"]:
                 parsed = read_docx(file["id"])
                 if parsed:
                     with st.expander("Preview DOCX"):
                         st.text(parsed[:1000])
-            elif mt == "application/pdf":
+            elif mt == ext_map["pdf"]:
                 parsed = read_pdf_table(file["id"])
                 if parsed is not None:
                     st.dataframe(parsed.head())
-            elif mt in ["image/png", "image/jpeg"]:
+            elif mt in [ext_map["png"], ext_map["jpg"]]:
                 parsed = read_image_table(file["id"])
                 if parsed is not None:
                     st.dataframe(parsed.head())
-            elif mt == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+            elif mt == ext_map["pptx"]:
                 parsed = read_pptx(file["id"])
                 if parsed:
                     with st.expander("Preview PPTX"):
                         st.text(parsed[:1000])
             else:
-                st.info("⏭️ Unsupported file type: " + mt)
+                st.warning("⏭️ Unhandled MIME type")
+
             progress.progress((i + 1) / MAX_FILES)
