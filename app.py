@@ -12,8 +12,10 @@ import pandas as pd
 import fitz  # PyMuPDF
 from docx import Document
 from pptx import Presentation
+import json
+import csv
 
-# === SECTION 1: UI Mapping for Resonate Fields ===
+# === SECTION 1: Resonate UI Mapping and Prepopulation ===
 resonate_taxonomy_map = {
     "Values and Beliefs": {
         "category": "Personal Values",
@@ -47,13 +49,23 @@ resonate_taxonomy_map = {
     }
 }
 
-def build_persona_form_ui(mapping):
+def extract_resonate_defaults(text_blocks, taxonomy_map):
+    joined_text = "\n".join(text_blocks).lower()
+    defaults = {}
+    for field, meta in taxonomy_map.items():
+        matches = [attr for attr in meta["attributes"] if attr.lower() in joined_text]
+        if matches:
+            defaults[field] = matches
+    return defaults
+
+def build_persona_form_ui(mapping, defaults=None):
     st.header("Refine Persona Attributes")
     results = {}
     for field, meta in mapping.items():
         with st.expander(f"{field} ({meta['category']})"):
             suggestions = meta["attributes"]
-            selected = st.multiselect(f"Select from Resonate Attributes for '{field}'", suggestions)
+            default_vals = defaults.get(field, []) if defaults else []
+            selected = st.multiselect(f"Select from Resonate Attributes for '{field}'", suggestions, default=default_vals)
 
             manual_input = st.text_input(f"Optional: Add custom entries for '{field}' (comma-separated)", key=field)
             manual_entries = [x.strip() for x in manual_input.split(",") if x.strip()]
@@ -71,7 +83,7 @@ def build_persona_form_ui(mapping):
                 st.warning(f"Unmatched entries: {', '.join(unmatched)}")
     return results
 
-# === SECTION 2: File Processing ===
+# === SECTION 2: File Processing + Persona Builder ===
 st.set_page_config(page_title="Persona Builder", layout="wide")
 st.title("Persona Builder")
 
@@ -194,34 +206,27 @@ if folder_id:
         if all_text_blocks:
             st.divider()
             st.subheader("🧠 Now Refine the Persona with Resonate Mapping")
-            form_data = build_persona_form_ui(resonate_taxonomy_map)
-            st.json(form_data)
 
-            if form_data:
-                st.subheader("📋 Final Persona Summary")
-                persona_summary = {}
-                for field, values in form_data.items():
-                    combined = list(set(values["selected"] + values["matched"] + values["manual"]))
-                    persona_summary[field] = ", ".join(combined)
-                st.table(persona_summary.items())
+            defaults = extract_resonate_defaults(all_text_blocks, resonate_taxonomy_map)
+            st.info("✨ Prepopulated suggestions based on document scan.")
+            form_data = build_persona_form_ui(resonate_taxonomy_map, defaults)
 
-                # Export options
-                import json
-                import csv
+            st.subheader("📋 Final Persona Summary")
+            persona_summary = {}
+            for field, values in form_data.items():
+                combined = list(set(values["selected"] + values["matched"] + values["manual"]))
+                persona_summary[field] = ", ".join(combined)
+            st.table(persona_summary.items())
 
-                # JSON download
-                json_str = json.dumps(persona_summary, indent=2)
-                st.download_button("📥 Download as JSON", json_str, file_name="persona.json", mime="application/json")
+            json_str = json.dumps(persona_summary, indent=2)
+            st.download_button("📥 Download as JSON", json_str, file_name="persona.json", mime="application/json")
 
-                # CSV download
-                import io
-                csv_buffer = io.StringIO()
-                writer = csv.writer(csv_buffer)
-                writer.writerow(["Field", "Value"])
-                for k, v in persona_summary.items():
-                    writer.writerow([k, v])
-                st.download_button("📥 Download as CSV", csv_buffer.getvalue(), file_name="persona.csv", mime="text/csv")
-
+            csv_buffer = io.StringIO()
+            writer = csv.writer(csv_buffer)
+            writer.writerow(["Field", "Value"])
+            for k, v in persona_summary.items():
+                writer.writerow([k, v])
+            st.download_button("📥 Download as CSV", csv_buffer.getvalue(), file_name="persona.csv", mime="text/csv")
 
     except Exception as e:
         st.error(f"❌ Error initializing services or accessing folder: {e}")
