@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import docx
-import fitz  # PyMuPDF
+import fitz
 from PIL import Image
 from io import BytesIO
 from google.oauth2 import service_account
@@ -11,9 +11,8 @@ import tempfile
 from pptx import Presentation
 
 st.set_page_config(page_title="Persona Builder", layout="wide")
-st.title("🧠 AI Persona Builder with File Filters & OCR Fallbacks")
+st.title("🧠 AI Persona Builder with Recursive Drive Scan")
 
-# Auth
 creds = service_account.Credentials.from_service_account_info(st.secrets["gcp"])
 drive_service = build("drive", "v3", credentials=creds)
 vision_client = vision.ImageAnnotatorClient(credentials=creds)
@@ -26,29 +25,44 @@ filetypes = st.multiselect(
     default=["csv", "xlsx", "xls", "docx", "pdf", "png", "jpg", "pptx"]
 )
 
-def list_files(folder_id):
-    try:
-        results = drive_service.files().list(
-            q=f"'{folder_id}' in parents and trashed=false",
-            fields="files(id, name, mimeType)",
-        ).execute()
-        return results.get("files", [])
-    except Exception as e:
-        st.error(f"Google Drive API error: {e}")
-        return []
+ext_map = {
+    "csv": "text/csv",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "xls": "application/vnd.ms-excel",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pdf": "application/pdf",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+}
+
+def list_files_recursive(folder_id):
+    files = []
+
+    def recurse(fid):
+        query = f"'{fid}' in parents and trashed=false"
+        response = drive_service.files().list(q=query, fields="files(id, name, mimeType)").execute()
+        for file in response.get("files", []):
+            if file["mimeType"] == "application/vnd.google-apps.folder":
+                recurse(file["id"])
+            else:
+                files.append(file)
+
+    recurse(folder_id)
+    return files
 
 def read_csv(file_id):
     try:
         data = drive_service.files().get_media(fileId=file_id).execute()
         return pd.read_csv(BytesIO(data))
-    except Exception:
+    except:
         return None
 
 def read_excel(file_id, engine=None):
     try:
         data = drive_service.files().get_media(fileId=file_id).execute()
         return pd.read_excel(BytesIO(data), engine=engine)
-    except Exception:
+    except:
         return None
 
 def read_docx(file_id):
@@ -56,7 +70,7 @@ def read_docx(file_id):
         data = drive_service.files().get_media(fileId=file_id).execute()
         doc = docx.Document(BytesIO(data))
         return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-    except Exception:
+    except:
         return None
 
 def read_pdf_table(file_id):
@@ -67,7 +81,7 @@ def read_pdf_table(file_id):
             doc = fitz.open(tmp.name)
             text = "\n".join([page.get_text() for page in doc])
         return extract_table_like_structure(text)
-    except Exception:
+    except:
         return None
 
 def read_image_table(file_id):
@@ -76,7 +90,7 @@ def read_image_table(file_id):
         image = vision.Image(content=data)
         response = vision_client.text_detection(image=image)
         return extract_table_like_structure(response.full_text_annotation.text)
-    except Exception:
+    except:
         return None
 
 def extract_table_like_structure(text):
@@ -87,7 +101,7 @@ def extract_table_like_structure(text):
     try:
         df = pd.DataFrame(rows[1:], columns=rows[0]) if len(rows) > 1 else pd.DataFrame(rows)
         return df
-    except Exception:
+    except:
         return None
 
 def read_pptx(file_id):
@@ -100,27 +114,15 @@ def read_pptx(file_id):
                 if hasattr(shape, "text"):
                     text.append(shape.text)
         return "\n".join(text)
-    except Exception:
+    except:
         return None
 
-# Mapping from extension to MIME type
-ext_map = {
-    "csv": "text/csv",
-    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "xls": "application/vnd.ms-excel",
-    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "pdf": "application/pdf",
-    "png": "image/png",
-    "jpg": "image/jpeg",
-    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-}
-
 if folder_id:
-    files = list_files(folder_id)
+    files = list_files_recursive(folder_id)
     if not files:
         st.warning("No files found.")
     else:
-        MAX_FILES = 5
+        MAX_FILES = 10
         progress = st.progress(0)
         for i, file in enumerate(files[:MAX_FILES]):
             mt = file["mimeType"]
@@ -164,5 +166,4 @@ if folder_id:
                         st.text(parsed[:1000])
             else:
                 st.warning("⏭️ Unhandled MIME type")
-
             progress.progress((i + 1) / MAX_FILES)
