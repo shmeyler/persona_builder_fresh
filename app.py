@@ -1,4 +1,37 @@
 
+def extract_insights_from_text_block(text_block):
+    import re
+    insights = []
+    current = {}
+
+    for line in text_block.splitlines():
+        line = line.strip()
+
+        if not line or re.match(r"^[0-9]{2}\.[0-9]{2}\.[0-9]{4}", line):  # Skip date stamps
+            continue
+
+        if re.match(r"^[A-Z ]{3,}$", line):  # Category like "TICKETING SERVICES USED"
+            current["Category"] = line.title()
+            continue
+
+        if line.endswith("%"):
+            try:
+                comp = float(line.strip('%'))
+                current["Composition"] = comp
+            except:
+                continue
+        elif re.match(r"^\d{2,3}$", line):
+            current["Index"] = int(line)
+        elif len(line.split()) <= 6:
+            current["Insight"] = line
+
+        if len(current) >= 3:
+            insights.append(current)
+            current = {}
+
+    return insights
+
+
 import streamlit as st
 import os
 import io
